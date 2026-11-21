@@ -28,8 +28,6 @@ import re
 import sys
 from pathlib import Path
 
-
-# Frameworks recognized by Kaggle Models
 SUPPORTED_FRAMEWORKS = [
     "scikit_learn",
     "scikit-learn",
@@ -45,7 +43,6 @@ RECOMMENDED_FRAMEWORK = "scikit_learn"
 RECOMMENDED_VARIATION = "hourly-demand"
 DEFAULT_LICENSE = None
 
-
 def compute_sha256(filepath: Path) -> str:
     """Compute SHA-256 hash of a file."""
     hasher = hashlib.sha256()
@@ -53,7 +50,6 @@ def compute_sha256(filepath: Path) -> str:
         while chunk := f.read(65536):
             hasher.update(chunk)
     return hasher.hexdigest()
-
 
 def check_artifacts(model_dir: Path) -> dict:
     """
@@ -71,7 +67,6 @@ def check_artifacts(model_dir: Path) -> dict:
         results["errors"].append(f"Model directory does not exist: {model_dir}")
         return results
 
-    # 1. Check bike_demand_model.pkl
     pkl_path = model_dir / "bike_demand_model.pkl"
     if not pkl_path.exists():
         results["valid"] = False
@@ -88,7 +83,6 @@ def check_artifacts(model_dir: Path) -> dict:
             "sha256": file_sha256,
         }
 
-    # 2. Check model_metadata.json
     json_path = model_dir / "model_metadata.json"
     if not json_path.exists():
         results["valid"] = False
@@ -109,7 +103,6 @@ def check_artifacts(model_dir: Path) -> dict:
 
     return results
 
-
 def check_authentication() -> dict:
     """
     Check Kaggle credentials securely without printing or leaking secrets.
@@ -122,7 +115,6 @@ def check_authentication() -> dict:
         "details": "",
     }
 
-    # Check environment variables
     env_user = os.environ.get("KAGGLE_USERNAME")
     env_key = os.environ.get("KAGGLE_KEY")
     if env_user and env_key:
@@ -132,7 +124,6 @@ def check_authentication() -> dict:
         result["details"] = f"Username '{result['username']}' configured via environment variables."
         return result
 
-    # Check ~/.kaggle/kaggle.json
     kaggle_json_path = Path.home() / ".kaggle" / "kaggle.json"
     if kaggle_json_path.exists():
         try:
@@ -163,7 +154,6 @@ def check_authentication() -> dict:
     )
     return result
 
-
 def check_dependencies() -> dict:
     """Check whether kagglehub and kaggle packages are installed."""
     deps = {
@@ -186,7 +176,6 @@ def check_dependencies() -> dict:
         deps["kaggle"]["installed"] = False
 
     return deps
-
 
 def validate_model_handle(handle: str) -> tuple[bool, str, dict]:
     """
@@ -232,7 +221,6 @@ def validate_model_handle(handle: str) -> tuple[bool, str, dict]:
     }
     return True, "Valid Kaggle Models handle", parsed
 
-
 def validate_dataset_handle(handle: str) -> tuple[bool, str, dict]:
     """
     Validate a Kaggle Dataset handle string.
@@ -261,7 +249,6 @@ def validate_dataset_handle(handle: str) -> tuple[bool, str, dict]:
             )
 
     return True, "Valid Kaggle Dataset handle", {"owner": owner, "dataset": dataset}
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -324,7 +311,6 @@ Examples:
 
     return parser.parse_args()
 
-
 def main():
     args = parse_args()
 
@@ -354,7 +340,6 @@ def main():
             if metrics:
                 print(f"      Test Metrics: MAE={metrics.get('mae')}, RMSE={metrics.get('rmse')}, R2={metrics.get('r2')}")
 
-    # 2. Check dependencies
     print("\n[2/5] Checking Python Kaggle dependencies:")
     deps = check_dependencies()
     for pkg, info in deps.items():
@@ -370,7 +355,6 @@ def main():
             print("\n  [ERROR] Cannot proceed with upload without kagglehub or kaggle installed.")
             sys.exit(1)
 
-    # 3. Check credentials
     print("\n[3/5] Checking Kaggle authentication:")
     auth = check_authentication()
     if auth["authenticated"]:
@@ -383,10 +367,8 @@ def main():
             print("\n  [ERROR] Cannot upload without Kaggle credentials.")
             sys.exit(1)
 
-    # 4. Handle validation
     print(f"\n[4/5] Validating upload target (mode: {args.mode}):")
 
-    # If handle not provided, try to build default
     handle = args.handle
     if not handle:
         username = auth["username"] if auth["username"] else "<your-username>"
@@ -417,7 +399,6 @@ def main():
         print(f"    - Owner:   {parsed['owner']}")
         print(f"    - Dataset: {parsed['dataset']}")
 
-    # 5. Execution or Dry Run
     print("\n[5/5] Upload Execution Plan:")
     print(f"  Target Mode:    {args.mode.upper()}")
     print(f"  Target Handle:  {handle}")
@@ -437,7 +418,6 @@ def main():
         print("=" * 72)
         return
 
-    # Check for confirmation
     if not args.yes:
         print("\n" + "-" * 72)
         confirm = input(f"Confirm upload to Kaggle ({args.mode}) at handle '{handle}'? [y/N]: ").strip().lower()
@@ -445,7 +425,6 @@ def main():
             print("Upload cancelled by user.")
             sys.exit(0)
 
-    # Perform Upload
     if args.mode == "model":
         if not deps["kagglehub"]["installed"]:
             print("[ERROR] 'kagglehub' package is required for Kaggle Models upload.")
@@ -453,7 +432,7 @@ def main():
             sys.exit(1)
 
         import kagglehub
-        # Normalize scikit-learn to scikit_learn for kagglehub enum compatibility
+
         upload_handle = handle
         if "/scikit-learn/" in handle:
             upload_handle = handle.replace("/scikit-learn/", "/scikit_learn/")
@@ -479,7 +458,7 @@ def main():
             sys.exit(1)
 
     elif args.mode == "dataset":
-        # Check/create dataset-metadata.json
+
         meta_file = model_dir / "dataset-metadata.json"
         if not meta_file.exists():
             ds_meta = {
@@ -520,7 +499,6 @@ def main():
         except Exception as e:
             print(f"\n[ERROR] Dataset upload failed: {e}")
             sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

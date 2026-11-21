@@ -27,7 +27,6 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-# ── constants ────────────────────────────────────────────────────────────────
 RANDOM_STATE = 42
 N_DEMAND_PROFILES = 4
 TEST_FRACTION = 0.20
@@ -35,7 +34,6 @@ SAFETY_BUFFER = 1.20
 TOP_STATIONS_TO_REPORT = 8
 ARTIFACT_PATH = Path("artifacts") / "bike_demand_model.pkl"
 
-# Dataset discovery — works from the project root or one level up.
 DATASET_CANDIDATES = [
     Path("data/a.csv"),
     Path("a.csv"),
@@ -51,7 +49,6 @@ if DATASET_PATH is None:
         "(recommended) or a.csv in the project root, then rerun."
     )
 
-
 def main() -> None:
     print("=" * 70)
     print("Smart Mobility Demand Forecasting — Training Pipeline")
@@ -59,7 +56,6 @@ def main() -> None:
     print(f"\nDataset path : {DATASET_PATH.resolve()}")
     print(f"Artifact dest: {ARTIFACT_PATH.resolve()}\n")
 
-    # ── 1. Load and validate ─────────────────────────────────────────────
     REQUIRED_COLUMNS = [
         "start_time", "duration", "vehicle_type",
         "start_station_id", "start_station_name",
@@ -89,7 +85,6 @@ def main() -> None:
     for vtype, count in vehicle_counts.items():
         print(f"  {vtype:20s}: {count:>8,} trips")
 
-    # ── 2. Hourly bicycle-demand aggregation ─────────────────────────────
     BIKE_TYPES = {"classic_bike", "electric_bike"}
     WEATHER_NUMERIC = [
         "temperature", "max_temperature", "min_temperature",
@@ -146,14 +141,12 @@ def main() -> None:
     hourly["season"] = [int(daily_season.loc[t.normalize()]) for t in full_hours]
     hourly["is_holiday"] = [int(daily_holiday.loc[t.normalize()]) for t in full_hours]
 
-    # Calendar features
     hourly["hour"] = hourly.index.hour
     hourly["day_of_week"] = hourly.index.dayofweek
     hourly["month"] = hourly.index.month
     hourly["day_of_year"] = hourly.index.dayofyear
     hourly["is_weekend"] = (hourly["day_of_week"] >= 5).astype(int)
 
-    # Cyclic encodings
     hourly["hour_sin"] = np.sin(2 * np.pi * hourly["hour"] / 24)
     hourly["hour_cos"] = np.cos(2 * np.pi * hourly["hour"] / 24)
     hourly["dow_sin"] = np.sin(2 * np.pi * hourly["day_of_week"] / 7)
@@ -163,7 +156,6 @@ def main() -> None:
     hourly["day_of_year_sin"] = np.sin(2 * np.pi * (hourly["day_of_year"] - 1) / 365.25)
     hourly["day_of_year_cos"] = np.cos(2 * np.pi * (hourly["day_of_year"] - 1) / 365.25)
 
-    # Categorical as strings
     hourly["weather_code"] = hourly["weather_code"].astype(str)
     hourly["season"] = hourly["season"].astype(str)
 
@@ -175,7 +167,6 @@ def main() -> None:
     print(f"Zero-demand hours        : {(hourly['bike_demand'] == 0).sum():,}")
     print(f"Bicycle trips aggregated : {hourly['bike_demand'].sum():,}")
 
-    # ── 3. Chronological train/test split ────────────────────────────────
     split_position = int(len(hourly) * (1 - TEST_FRACTION))
     split_timestamp = hourly.index[split_position]
 
@@ -190,7 +181,6 @@ def main() -> None:
     print(f"Training hours           : {len(train_df):,}")
     print(f"Testing hours            : {len(test_df):,}")
 
-    # ── 4. K-Means demand profiles ───────────────────────────────────────
     CLUSTER_NUMERIC_FEATURES = [
         "temperature", "max_temperature", "min_temperature",
         "wind_speed", "precipitation", "humidity", "sunshine",
@@ -226,7 +216,6 @@ def main() -> None:
         .sort_values()
     )
 
-    # ── 4b. Assess cluster separability to choose labels ─────────────────
     cluster_stats_df = (
         pd.DataFrame({"cluster_id": train_cluster_ids, "bike_demand": train_df["bike_demand"].to_numpy()})
         .groupby("cluster_id")["bike_demand"]
@@ -234,7 +223,6 @@ def main() -> None:
     cluster_stds = cluster_stats_df.std()
     sorted_cluster_ids = cluster_means.index.tolist()
 
-    # Check consecutive-pair separability using Cohen's d
     demand_level_labels = [
         "Low demand profile",
         "Moderate demand profile",
@@ -274,7 +262,6 @@ def main() -> None:
     train_df["demand_profile"] = [cluster_label_map[int(x)] for x in train_cluster_ids]
     test_df["demand_profile"] = [cluster_label_map[int(x)] for x in test_cluster_ids]
 
-    # ── 4c. Compute detailed cluster statistics for the artifact ─────────
     cluster_detail_stats = {}
     for cid in sorted_cluster_ids:
         mask = train_cluster_ids == cid
@@ -305,7 +292,6 @@ def main() -> None:
         row = cluster_summary.loc[profile]
         print(f"  {profile:35s}  hours={int(row['count']):>5,}  mean={row['mean']:>7.1f}  median={row['median']:>6.1f}  std={row['std']:>6.1f}")
 
-    # ── 5. Regression model ──────────────────────────────────────────────
     MODEL_NUMERIC_FEATURES = CLUSTER_NUMERIC_FEATURES.copy()
     MODEL_CATEGORICAL_FEATURES = ["weather_code", "season", "demand_profile"]
     MODEL_FEATURES = MODEL_NUMERIC_FEATURES + MODEL_CATEGORICAL_FEATURES
@@ -336,7 +322,6 @@ def main() -> None:
     model.fit(train_df[MODEL_FEATURES], train_df["bike_demand"])
     model_predictions = np.maximum(0, model.predict(test_df[MODEL_FEATURES]))
 
-    # ── 6. Weekday-hour baseline ─────────────────────────────────────────
     baseline_by_dow_hour = (
         train_df.groupby(["day_of_week", "hour"])["bike_demand"].mean().to_dict()
     )
@@ -347,7 +332,6 @@ def main() -> None:
         for row in test_df.itertuples()
     ], dtype=float)
 
-    # ── 7. Evaluation ────────────────────────────────────────────────────
     actual = test_df["bike_demand"].to_numpy(dtype=float)
 
     def regression_metrics(y_true, y_pred):
@@ -373,7 +357,6 @@ def main() -> None:
         print(f"  {label:28s}  {row['MAE (trips/hour)']:>10.3f}  {row['RMSE (trips/hour)']:>10.3f}  {row['R2']:>10.3f}")
     print("\nLower MAE/RMSE is better.  R² is descriptive; negative means worse than predicting the test mean.")
 
-    # ── 8. Capacity & station allocation references ──────────────────────
     train_bike_rows = bike_rows[bike_rows["hour_start"] < split_timestamp].copy()
     if train_bike_rows.empty:
         raise ValueError("No bicycle trips in the training period.")
@@ -418,15 +401,11 @@ def main() -> None:
     print(f"\nMean trip duration (train): {mean_trip_duration_minutes:.2f} minutes")
     print(f"Stations in training set : {station_total_count}")
 
-    # ── 9. Build holiday lookup from dataset ─────────────────────────────
-    # Maps date strings to their is_holiday value for all 2023 dates covered
-    # by the dataset.  Used by the API for historical holiday validation.
     holiday_lookup = {
         str(d.date()): int(v)
         for d, v in daily_holiday.items()
     }
 
-    # ── 10. Extract known categorical codes ──────────────────────────────
     known_weather_codes = sorted(int(x) for x in hourly["weather_code"].unique())
     known_season_codes = sorted(int(x) for x in hourly["season"].unique())
 
@@ -434,7 +413,6 @@ def main() -> None:
     print(f"Known season codes       : {known_season_codes}")
     print(f"Holiday dates in dataset : {sum(1 for v in holiday_lookup.values() if v == 1)}")
 
-    # ── 11. Save artifact ────────────────────────────────────────────────
     ARTIFACT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     cluster_demand_means = {
@@ -486,7 +464,6 @@ def main() -> None:
     print(f"Size : {ARTIFACT_PATH.stat().st_size / 1024:.1f} KB")
     print("\nTraining complete. Run the API with:")
     print("  python -m uvicorn main:app --reload")
-
 
 if __name__ == "__main__":
     main()

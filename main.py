@@ -29,7 +29,6 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-# ── MongoDB ──────────────────────────────────────────────────────────────────
 from pymongo import MongoClient, DESCENDING
 from pymongo.errors import ConnectionFailure, PyMongoError
 from bson import ObjectId
@@ -39,12 +38,10 @@ MONGODB_URI = os.environ.get("MONGODB_URI", "mongodb://localhost:27017/")
 MONGODB_DATABASE = os.environ.get("MONGODB_DATABASE", "smart_mobility")
 MONGODB_COLLECTION = os.environ.get("MONGODB_COLLECTION", "prediction_history")
 
-# ── constants ────────────────────────────────────────────────────────────────
 ARTIFACT_PATH = Path("artifacts") / "bike_demand_model.pkl"
 SAFETY_BUFFER = 1.20
-BASELINE_THRESHOLD = 0.15  # 15% above/below baseline for recommendations
+BASELINE_THRESHOLD = 0.15
 
-# ── application ──────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Smart Mobility Demand Forecasting API",
     description=(
@@ -56,15 +53,11 @@ app = FastAPI(
     version="1.2.2",
 )
 
-# Global model bundle — loaded once at startup.
 artifact: Optional[Dict[str, Any]] = None
 
-# Global MongoDB handles — opened once at startup, closed at shutdown.
 mongo_client: Optional[MongoClient] = None
 mongo_collection = None
 
-
-# ── timestamp formatting helper ──────────────────────────────────────────────
 def format_utc_timestamp(val: Any) -> Optional[str]:
     """
     Serialize a timestamp into ISO 8601 format ending in 'Z'
@@ -87,7 +80,7 @@ def format_utc_timestamp(val: Any) -> Optional[str]:
             return s
 
     if isinstance(val, datetime):
-        # If timezone-aware, convert to UTC; if naive from BSON Date (which represents UTC), set UTC
+
         if val.tzinfo is not None:
             val = val.astimezone(timezone.utc)
         else:
@@ -98,14 +91,11 @@ def format_utc_timestamp(val: Any) -> Optional[str]:
 
     return str(val)
 
-
-# ── lifecycle events ─────────────────────────────────────────────────────────
 @app.on_event("startup")
 def startup() -> None:
     """Load model artifact and connect to MongoDB."""
     global artifact, mongo_client, mongo_collection
 
-    # --- Model ---
     if ARTIFACT_PATH.exists():
         artifact = joblib.load(ARTIFACT_PATH)
         print(f"Model artifact loaded from {ARTIFACT_PATH.resolve()}")
@@ -115,13 +105,12 @@ def startup() -> None:
             "Run `python train_model.py` first."
         )
 
-    # --- MongoDB ---
     try:
         mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000, tz_aware=True)
         mongo_client.admin.command("ping")
         db = mongo_client[MONGODB_DATABASE]
         mongo_collection = db[MONGODB_COLLECTION]
-        # Descending index on created_at for efficient history queries
+
         mongo_collection.create_index([("created_at", DESCENDING)])
         print(
             f"MongoDB connected — database: {MONGODB_DATABASE}, "
@@ -131,7 +120,6 @@ def startup() -> None:
         print(f"WARNING: MongoDB connection failed — {exc}")
         mongo_client = None
         mongo_collection = None
-
 
 @app.on_event("shutdown")
 def shutdown() -> None:
@@ -143,8 +131,6 @@ def shutdown() -> None:
         mongo_collection = None
         print("MongoDB connection closed.")
 
-
-# ── MongoDB helpers ──────────────────────────────────────────────────────────
 def _mongo_is_available() -> bool:
     """Check if the MongoDB client can reach the server."""
     if mongo_client is None:
@@ -155,8 +141,6 @@ def _mongo_is_available() -> bool:
     except PyMongoError:
         return False
 
-
-# ── request / response schemas ───────────────────────────────────────────────
 class PredictRequest(BaseModel):
     """The 12 user-supplied fields for a single hourly prediction."""
     date: str = Field(..., description="Date in YYYY-MM-DD format", examples=["2023-11-07"])
@@ -181,6 +165,22 @@ class PredictRequest(BaseModel):
             raise ValueError("date must be in YYYY-MM-DD format")
         return v
 
+    @field_validator(
+        "temperature",
+        "max_temperature",
+        "min_temperature",
+        "wind_speed",
+        "precipitation",
+        "humidity",
+        "sunshine",
+        mode="after",
+    )
+    @classmethod
+    def validate_finite_numbers(cls, v: float) -> float:
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError("Numerical values must be finite and cannot be NaN or infinite")
+        return v
+
     @model_validator(mode="after")
     def validate_temperature_consistency(self) -> "PredictRequest":
         """Ensure min_temperature <= temperature <= max_temperature."""
@@ -201,8 +201,6 @@ class PredictRequest(BaseModel):
             )
         return self
 
-
-# ── helper: feature engineering ──────────────────────────────────────────────
 def build_features(req: PredictRequest) -> tuple[pd.Timestamp, int, int, dict]:
     """
     Derive calendar and cyclic features from the 12 user-supplied inputs.
@@ -236,8 +234,6 @@ def build_features(req: PredictRequest) -> tuple[pd.Timestamp, int, int, dict]:
     }
     return timestamp, dow, req.hour, row
 
-
-# ── helper: warning classification ───────────────────────────────────────────
 def classify_warnings(
     timestamp: pd.Timestamp,
     req: PredictRequest,
@@ -265,24 +261,23 @@ def classify_warnings(
         ts_ds_end = pd.Timestamp(dataset_end)
 
         if timestamp < ts_ds_start or timestamp > ts_ds_end:
-            # Case C — outside dataset coverage
+
             warnings_list.append(
                 f"The requested date/hour ({timestamp}) is outside the original "
                 f"dataset coverage ({dataset_start} to {dataset_end}). "
                 "The prediction is an extrapolation and may be less reliable."
             )
         elif timestamp < ts_train_start or timestamp > ts_train_end:
-            # Case B — held-out evaluation period
+
             warnings_list.append(
                 f"The requested date/hour ({timestamp}) belongs to the held-out "
                 "evaluation period. This observation was not used for model "
                 "training. It is within the original dataset coverage."
             )
-        # Case A — training period: no date warning
+
     except Exception:
         pass
 
-    # Holiday consistency check for dates covered by the 2023 dataset
     holiday_lookup = art.get("holiday_lookup", {})
     date_str = req.date
     if date_str in holiday_lookup:
@@ -295,7 +290,6 @@ def classify_warnings(
                 f"{expected}, but is_holiday was supplied as {supplied}."
             )
 
-    # Weather code warning
     known_weather = art.get("known_weather_codes", [])
     if known_weather and req.weather not in known_weather:
         warnings_list.append(
@@ -303,7 +297,6 @@ def classify_warnings(
             f"Known codes: {known_weather}. The model may handle this as an unseen category."
         )
 
-    # Season code warning
     known_seasons = art.get("known_season_codes", [])
     if known_seasons and req.season not in known_seasons:
         warnings_list.append(
@@ -313,8 +306,6 @@ def classify_warnings(
 
     return warnings_list
 
-
-# ── endpoints ────────────────────────────────────────────────────────────────
 @app.get("/", tags=["Info"])
 def root():
     """Project information and API availability."""
@@ -336,7 +327,6 @@ def root():
             "GET /history/{record_id}": "Retrieve a single prediction record",
         },
     }
-
 
 @app.get("/health", tags=["Info"])
 def health():
@@ -387,7 +377,6 @@ def health():
 
     return response
 
-
 @app.post("/predict", tags=["Prediction"])
 def predict(req: PredictRequest):
     """
@@ -407,16 +396,13 @@ def predict(req: PredictRequest):
             detail="Model not loaded. Run `python train_model.py` and restart the server.",
         )
 
-    # 1. Feature engineering
     timestamp, dow, hour_val, feature_row = build_features(req)
 
-    # 2. Warning classification and input validation (before prediction)
     try:
         warnings_list = classify_warnings(timestamp, req, artifact)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    # 3. Cluster assignment (demand profile)
     cluster_features = artifact["cluster_numeric_features"] + artifact["cluster_categorical_features"]
     context_df = pd.DataFrame([feature_row])
     context_matrix = artifact["cluster_preprocessor"].transform(context_df[cluster_features])
@@ -424,13 +410,11 @@ def predict(req: PredictRequest):
     demand_profile = artifact["cluster_label_map"][cluster_id]
     feature_row["demand_profile"] = demand_profile
 
-    # 4. Regression prediction
     model_features = artifact["model_numeric_features"] + artifact["model_categorical_features"]
     feature_df = pd.DataFrame([feature_row])
     raw_prediction = float(artifact["model"].predict(feature_df[model_features])[0])
     predicted_demand = round(max(0.0, raw_prediction), 2)
 
-    # 5. Baseline lookup
     baseline_demand = round(
         artifact["baseline_by_dow_hour"].get(
             (dow, hour_val),
@@ -439,7 +423,6 @@ def predict(req: PredictRequest):
         2,
     )
 
-    # 6. Capacity recommendation
     mean_duration = artifact["mean_trip_duration_minutes"]
     safety_buffer = artifact.get("safety_buffer", SAFETY_BUFFER)
 
@@ -458,7 +441,6 @@ def predict(req: PredictRequest):
     else:
         recommendation = "Maintain current bicycle availability"
 
-    # 7. Profile statistics
     profile_avg_demand = round(
         artifact["cluster_demand_means"].get(cluster_id, 0.0), 2
     )
@@ -467,7 +449,6 @@ def predict(req: PredictRequest):
     if demand_profile in cluster_detail:
         profile_stats = cluster_detail[demand_profile]
 
-    # 8. Station allocation
     station_shares = artifact["station_share_lookup"].get(
         (dow, hour_val),
         artifact["global_station_shares"],
@@ -488,7 +469,6 @@ def predict(req: PredictRequest):
     remaining_share = max(0.0, 1.0 - allocated_share)
     remaining_pickups = round(predicted_demand * remaining_share, 2)
 
-    # Build the prediction response
     prediction_response: Dict[str, Any] = {
         "input": {
             "date": req.date,
@@ -542,9 +522,8 @@ def predict(req: PredictRequest):
     if profile_stats is not None:
         prediction_response["prediction"]["profile_statistics"] = profile_stats
 
-    # 9. Persist to MongoDB with timezone-aware UTC timestamp ending in 'Z'
     now = datetime.now(timezone.utc)
-    # Align to millisecond precision matching MongoDB BSON datetime storage
+
     created_at = now.replace(microsecond=(now.microsecond // 1000) * 1000)
     created_at_iso = format_utc_timestamp(created_at)
 
@@ -580,8 +559,6 @@ def predict(req: PredictRequest):
 
     return prediction_response
 
-
-# ── history endpoints ────────────────────────────────────────────────────────
 @app.get("/history", tags=["History"])
 def get_history(
     limit: int = Query(default=20, ge=1, le=100, description="Records per page"),
@@ -614,7 +591,6 @@ def get_history(
 
             created_iso = format_utc_timestamp(doc.get("created_at"))
 
-            # Ensure response inside document also has consistent timestamp and record_id
             if resp:
                 if not resp.get("created_at"):
                     resp["created_at"] = created_iso
@@ -642,7 +618,6 @@ def get_history(
             status_code=503,
             detail=f"Failed to retrieve prediction history: {exc}",
         )
-
 
 @app.get("/history/{record_id}", tags=["History"])
 def get_history_record(record_id: str):
