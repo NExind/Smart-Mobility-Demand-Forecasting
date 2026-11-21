@@ -31,6 +31,7 @@ from pathlib import Path
 
 # Frameworks recognized by Kaggle Models
 SUPPORTED_FRAMEWORKS = [
+    "scikit_learn",
     "scikit-learn",
     "other",
     "transformers",
@@ -40,9 +41,9 @@ SUPPORTED_FRAMEWORKS = [
     "keras",
 ]
 
-RECOMMENDED_FRAMEWORK = "scikit-learn"
+RECOMMENDED_FRAMEWORK = "scikit_learn"
 RECOMMENDED_VARIATION = "hourly-demand"
-DEFAULT_LICENSE = "CC-BY-NC-4.0"
+DEFAULT_LICENSE = None
 
 
 def compute_sha256(filepath: Path) -> str:
@@ -452,14 +453,20 @@ def main():
             sys.exit(1)
 
         import kagglehub
-        print(f"\nUploading model to Kaggle Models ({handle})...")
+        # Normalize scikit-learn to scikit_learn for kagglehub enum compatibility
+        upload_handle = handle
+        if "/scikit-learn/" in handle:
+            upload_handle = handle.replace("/scikit-learn/", "/scikit_learn/")
+        print(f"\nUploading model to Kaggle Models ({upload_handle})...")
         try:
-            kagglehub.model_upload(
-                handle=handle,
-                local_model_dir=str(model_dir),
-                version_notes=args.version_notes,
-                license_name=args.license,
-            )
+            kwargs = {
+                "handle": upload_handle,
+                "local_model_dir": str(model_dir),
+                "version_notes": args.version_notes,
+            }
+            if args.license:
+                kwargs["license_name"] = args.license
+            kagglehub.model_upload(**kwargs)
             print("\n[SUCCESS] Model successfully uploaded to Kaggle Models!")
             print(f"Access your model at: https://www.kaggle.com/models/{handle}")
         except Exception as e:
