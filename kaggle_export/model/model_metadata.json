@@ -1,0 +1,309 @@
+{
+  "project_title": "Smart Mobility Demand Forecasting and Capacity Allocation",
+  "model_name": "smart-mobility-bike-demand",
+  "model_version": 2,
+  "model_description": "A two-stage machine learning system for shared-bicycle demand forecasting and fleet capacity management. Uses K-Means clustering (4 contextual profiles) to capture temporal and meteorological patterns, HistGradientBoostingRegressor for hourly departure predictions, a weekday-hour baseline for anomaly detection, and historical station pickup share allocation.",
+  "architecture": {
+    "clustering": {
+      "algorithm": "KMeans",
+      "n_clusters": 4,
+      "random_state": 42,
+      "n_init": 20,
+      "preprocessing": "StandardScaler for numericals, OneHotEncoder for categoricals",
+      "numeric_features": [
+        "temperature",
+        "max_temperature",
+        "min_temperature",
+        "wind_speed",
+        "precipitation",
+        "humidity",
+        "sunshine",
+        "hour_sin",
+        "hour_cos",
+        "dow_sin",
+        "dow_cos",
+        "month_sin",
+        "month_cos",
+        "day_of_year_sin",
+        "day_of_year_cos",
+        "is_holiday",
+        "is_weekend"
+      ],
+      "categorical_features": [
+        "weather_code",
+        "season"
+      ],
+      "label_style": "contextual",
+      "profiles": {
+        "Contextual demand profile 1": {
+          "cluster_id": 2,
+          "count": 1937,
+          "pct_of_training": 27.7,
+          "mean": 20.57,
+          "median": 14.0,
+          "std": 22.93,
+          "min": 0,
+          "max": 124,
+          "p10": 0.0,
+          "p25": 2.0,
+          "p75": 30.0,
+          "p90": 54.0
+        },
+        "Contextual demand profile 2": {
+          "cluster_id": 0,
+          "count": 2094,
+          "pct_of_training": 29.9,
+          "mean": 31.76,
+          "median": 21.0,
+          "std": 34.35,
+          "min": 0,
+          "max": 187,
+          "p10": 0.0,
+          "p25": 3.0,
+          "p75": 47.0,
+          "p90": 78.0
+        },
+        "Contextual demand profile 3": {
+          "cluster_id": 3,
+          "count": 1549,
+          "pct_of_training": 22.1,
+          "mean": 31.92,
+          "median": 24.0,
+          "std": 33.41,
+          "min": 0,
+          "max": 168,
+          "p10": 0.0,
+          "p25": 3.0,
+          "p75": 48.0,
+          "p90": 78.2
+        },
+        "Contextual demand profile 4": {
+          "cluster_id": 1,
+          "count": 1424,
+          "pct_of_training": 20.3,
+          "mean": 52.8,
+          "median": 50.0,
+          "std": 43.85,
+          "min": 0,
+          "max": 206,
+          "p10": 0.0,
+          "p25": 10.8,
+          "p75": 79.0,
+          "p90": 108.0
+        }
+      }
+    },
+    "regression": {
+      "algorithm": "HistGradientBoostingRegressor",
+      "loss": "squared_error",
+      "learning_rate": 0.06,
+      "max_iter": 300,
+      "max_leaf_nodes": 20,
+      "min_samples_leaf": 25,
+      "l2_regularization": 2.0,
+      "early_stopping": true,
+      "random_state": 42,
+      "preprocessing": "ColumnTransformer (passthrough numerics + OneHotEncoder categoricals)",
+      "numeric_features": [
+        "temperature",
+        "max_temperature",
+        "min_temperature",
+        "wind_speed",
+        "precipitation",
+        "humidity",
+        "sunshine",
+        "hour_sin",
+        "hour_cos",
+        "dow_sin",
+        "dow_cos",
+        "month_sin",
+        "month_cos",
+        "day_of_year_sin",
+        "day_of_year_cos",
+        "is_holiday",
+        "is_weekend"
+      ],
+      "categorical_features": [
+        "weather_code",
+        "season",
+        "demand_profile"
+      ]
+    },
+    "baseline_model": {
+      "type": "Historical Weekday-Hour Mean Lookup",
+      "number_of_lookup_bins": 168,
+      "overall_training_mean": 32.98
+    },
+    "capacity_estimation": {
+      "mean_trip_duration_minutes": 14.68,
+      "median_trip_duration_minutes": 10.93,
+      "safety_buffer_multiplier": 1.2,
+      "baseline_alert_threshold_pct": 15.0
+    },
+    "station_allocation": {
+      "method": "Historical pickup proportion by weekday and hour",
+      "top_stations_tracked": 8,
+      "total_stations_represented": 122
+    }
+  },
+  "dataset": {
+    "name": "a.csv",
+    "description": "Trip logs from Bergen, Norway shared mobility network spanning full year 2023 with matched meteorological data",
+    "raw_trip_records": 467861,
+    "bicycle_trips_modeled": 269052,
+    "excluded_scooter_trips": 198809,
+    "bicycle_types": [
+      "classic_bike",
+      "electric_bike"
+    ],
+    "total_hourly_intervals": 8755,
+    "zero_demand_hours_preserved": 1882,
+    "coverage_start": "2023-01-01 04:00:00",
+    "coverage_end": "2023-12-31 22:00:00"
+  },
+  "evaluation_and_split": {
+    "split_type": "Chronological 80/20 hold-out (no random shuffling)",
+    "training_period": {
+      "start": "2023-01-01 04:00:00",
+      "end": "2023-10-19 23:00:00",
+      "total_hours": 7004
+    },
+    "test_period": {
+      "start": "2023-10-20 00:00:00",
+      "end": "2023-12-31 22:00:00",
+      "total_hours": 1751
+    },
+    "metrics": {
+      "ML model": {
+        "MAE (trips/hour)": 7.225273784549254,
+        "RMSE (trips/hour)": 11.165985847747432,
+        "R2": 0.817792319759983
+      },
+      "Weekday-hour baseline": {
+        "MAE (trips/hour)": 15.049849397490465,
+        "RMSE (trips/hour)": 22.709503262347265,
+        "R2": 0.24631859159638747
+      }
+    }
+  },
+  "input_specification": {
+    "user_supplied_fields": 12,
+    "fields": [
+      {
+        "name": "date",
+        "type": "string",
+        "format": "YYYY-MM-DD"
+      },
+      {
+        "name": "hour",
+        "type": "integer",
+        "range": [
+          0,
+          23
+        ]
+      },
+      {
+        "name": "temperature",
+        "type": "float",
+        "unit": "Celsius"
+      },
+      {
+        "name": "max_temperature",
+        "type": "float",
+        "unit": "Celsius"
+      },
+      {
+        "name": "min_temperature",
+        "type": "float",
+        "unit": "Celsius"
+      },
+      {
+        "name": "wind_speed",
+        "type": "float",
+        "unit": "m/s",
+        "min": 0.0
+      },
+      {
+        "name": "precipitation",
+        "type": "float",
+        "unit": "mm",
+        "min": 0.0
+      },
+      {
+        "name": "humidity",
+        "type": "float",
+        "unit": "percent",
+        "range": [
+          0.0,
+          100.0
+        ]
+      },
+      {
+        "name": "weather",
+        "type": "integer",
+        "description": "Weather code"
+      },
+      {
+        "name": "sunshine",
+        "type": "float",
+        "unit": "minutes",
+        "min": 0.0
+      },
+      {
+        "name": "season",
+        "type": "integer",
+        "description": "Season code (0-3)"
+      },
+      {
+        "name": "is_holiday",
+        "type": "boolean",
+        "description": "Public holiday indicator"
+      }
+    ],
+    "derived_features": [
+      "day_of_week",
+      "is_weekend",
+      "month",
+      "day_of_year",
+      "hour_sin",
+      "hour_cos",
+      "dow_sin",
+      "dow_cos",
+      "month_sin",
+      "month_cos",
+      "day_of_year_sin",
+      "day_of_year_cos"
+    ],
+    "known_weather_codes": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      8,
+      9,
+      10,
+      12,
+      13,
+      15,
+      22,
+      42,
+      46,
+      49
+    ],
+    "known_season_codes": [
+      0,
+      1,
+      2,
+      3
+    ]
+  },
+  "environment": {
+    "python_version": "3.14.0",
+    "scikit_learn_version": "1.8.0",
+    "pandas_version": "3.0.5",
+    "numpy_version": "2.5.1",
+    "joblib_version": "1.5.3"
+  },
+  "license": "CC BY-NC 4.0 / Academic Research Use Only"
+}
