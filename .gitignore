@@ -1,18 +1,14 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
 *.so
 
-# Virtual Environments
 .venv/
 venv/
 ENV/
 env/
 
-# Environment files and credentials (Never commit secrets)
 .env
 .env.*
 !.env.example
@@ -22,35 +18,29 @@ ngrok.log
 *.pem
 *.key
 
-# Jupyter Notebook checkpoints
 .ipynb_checkpoints/
 *-checkpoint.ipynb
 
-# IDE & Editor Configurations
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Operating System Files
 .DS_Store
 Thumbs.db
 ehthumbs.db
 desktop.ini
 
-# Logs and databases
 *.log
 logs/
 mongo_dump/
 *.bson
 *.jsonl
 
-# Scratch scripts & temporary tests
 scratch/
 test_*.py
 
-# Large Datasets (> 100 MB / licensing restrictions)
 data/*.csv
 data/*.zip
 data/*.parquet
