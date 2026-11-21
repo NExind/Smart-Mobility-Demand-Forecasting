@@ -25,7 +25,7 @@ Predict hourly shared-bicycle demand using weather, time, and seasonal context â
 15. [API Endpoint Documentation](#15-api-endpoint-documentation)
 16. [Postman Testing Instructions](#16-postman-testing-instructions)
 17. [Local Setup Instructions](#17-local-setup-instructions)
-18. [Public Deployment with ngrok](#18-public-deployment-with-ngrok)
+18. [Deployment (Render & ngrok)](#18-deployment-render--ngrok)
 19. [Project Limitations](#19-project-limitations)
 20. [Running the Jupyter Notebook](#20-running-the-jupyter-notebook)
 21. [Documentation & Model Artifacts](#21-documentation--model-artifacts)
@@ -244,13 +244,18 @@ The backend (`main.py`) provides a clean, robust REST API:
 
 ---
 
-## 14. MongoDB Integration
+## 14. MongoDB Integration & Persistence Configuration
 
+Prediction persistence is managed via an environment toggle:
+- `MONGODB_ENABLED=false` (default on hosted platforms like Render): Standalone ML inference mode. MongoDB is not required or contacted during startup or prediction. History endpoints return HTTP 503.
+- `MONGODB_ENABLED=true`: Full local audit mode. Every prediction request and response is persisted to MongoDB.
+
+When enabled:
 - **Database:** `smart_mobility`
 - **Collection:** `prediction_history`
 - **Driver:** `pymongo` (with reusable client and ping connectivity verification)
 - **Document Structure:** Stores the complete input payload, model forecast, baseline metrics, capacity calculation, station distribution, and UTC timestamp ending in `Z` (`YYYY-MM-DDTHH:MM:SS.mmmZ`).
-- **Response Fields:** Includes `prediction_record_id` (string ObjectId) and `created_at` timestamp.
+- **Response Fields:** Includes `prediction_record_id` (string ObjectId when saved; `null` when persistence is disabled) and `created_at` timestamp.
 
 ---
 
@@ -352,13 +357,15 @@ pip install -r requirements.txt
 ```
 
 ### 4. Configure Environment
-Copy `.env.example` to `.env` (adjust MongoDB URI if not using local default):
+Copy `.env.example` to `.env`:
 ```bash
 cp .env.example .env
 ```
+- For **standalone inference** (no MongoDB required): set `MONGODB_ENABLED=false` (or leave unset).
+- For **local database testing**: set `MONGODB_ENABLED=true` and adjust `MONGODB_URI` if necessary.
 
-### 5. Start MongoDB
-Ensure MongoDB is running locally on port `27017` (e.g., via MongoDB Community Server or Compass).
+### 5. Start MongoDB (Optional)
+If running with `MONGODB_ENABLED=true`, ensure MongoDB is running locally on port `27017` (e.g., via MongoDB Community Server or Compass). If `MONGODB_ENABLED=false`, MongoDB is not needed.
 
 ### 6. Run the FastAPI Application
 ```bash
@@ -368,7 +375,30 @@ Open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) in your browser.
 
 ---
 
-## 18. Public Deployment with ngrok
+## 18. Deployment (Render & ngrok)
+
+### A. Deploy to Render (Web Service)
+
+The project is pre-configured for instant deployment on [Render](https://render.com):
+
+1. **Create Web Service:** Connect your GitHub repository (`NExind/Smart-Mobility-Demand-Forecasting`).
+2. **Environment:** `Python 3`
+3. **Build Command:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. **Start Command:**
+   ```bash
+   uvicorn main:app --host 0.0.0.0 --port $PORT
+   ```
+5. **Environment Variables:**
+   - `MONGODB_ENABLED`: `false` (Standalone ML inference mode; no external database required)
+
+Render will automatically bind to the dynamic `$PORT` and expose a public HTTPS URL (e.g. `https://smart-mobility-demand-forecasting.onrender.com`).
+
+Alternatively, use the included [`render.yaml`](render.yaml) for Blueprint deployment.
+
+### B. Public Tunneling with ngrok (Local Development)
 
 To expose your local FastAPI server to remote clients or Postman via a secure public HTTPS URL:
 

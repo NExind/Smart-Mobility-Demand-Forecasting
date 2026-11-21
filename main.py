@@ -19,7 +19,11 @@ MONGODB_COLLECTION = os.environ.get('MONGODB_COLLECTION', 'prediction_history')
 ARTIFACT_PATH = Path('artifacts') / 'bike_demand_model.pkl'
 SAFETY_BUFFER = 1.2
 BASELINE_THRESHOLD = 0.15
-app = FastAPI(title='Smart Mobility Demand Forecasting API', description='Predicts hourly shared-bicycle demand using weather, time, and seasonal context.  Returns demand profiles, capacity recommendations, and station pickup allocation estimates.  Prediction history is persisted to MongoDB.', version='1.2.2')
+
+def is_mongodb_enabled() -> bool:
+    return os.environ.get('MONGODB_ENABLED', 'false').strip().lower() in ('true', '1', 'yes')
+
+app = FastAPI(title='Smart Mobility Demand Forecasting API', description='Predicts hourly shared-bicycle demand using weather, time, and seasonal context. Returns demand profiles, capacity recommendations, and station pickup allocation estimates. Optional prediction history persistence with MongoDB.', version='1.2.2')
 artifact: Optional[Dict[str, Any]] = None
 mongo_client: Optional[MongoClient] = None
 mongo_collection = None
@@ -53,17 +57,24 @@ def startup() -> None:
         print(f'Model artifact loaded from {ARTIFACT_PATH.resolve()}')
     else:
         print(f'WARNING: Model artifact not found at {ARTIFACT_PATH.resolve()}.  Run `python train_model.py` first.')
-    try:
-        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000, tz_aware=True)
-        mongo_client.admin.command('ping')
-        db = mongo_client[MONGODB_DATABASE]
-        mongo_collection = db[MONGODB_COLLECTION]
-        mongo_collection.create_index([('created_at', DESCENDING)])
-        print(f'MongoDB connected — database: {MONGODB_DATABASE}, collection: {MONGODB_COLLECTION}')
-    except ConnectionFailure as exc:
-        print(f'WARNING: MongoDB connection failed — {exc}')
+    if is_mongodb_enabled():
+        try:
+            mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000, tz_aware=True)
+            mongo_client.admin.command('ping')
+            db = mongo_client[MONGODB_DATABASE]
+            mongo_collection = db[MONGODB_COLLECTION]
+            mongo_collection.create_index([('created_at', DESCENDING)])
+            print(f'MongoDB connected — database: {MONGODB_DATABASE}, collection: {MONGODB_COLLECTION}')
+        except (ConnectionFailure, PyMongoError) as exc:
+            print(f'WARNING: MongoDB connection failed — {exc}')
+            mongo_client = None
+            mongo_collection = None
+    else:
+        if mongo_client is not None:
+            mongo_client.close()
         mongo_client = None
         mongo_collection = None
+        print('MongoDB persistence is disabled (MONGODB_ENABLED=false). Database persistence skipped.')
 
 @app.on_event('shutdown')
 def shutdown() -> None:
@@ -75,6 +86,8 @@ def shutdown() -> None:
         print('MongoDB connection closed.')
 
 def _mongo_is_available() -> bool:
+    if not is_mongodb_enabled():
+        return False
     if mongo_client is None:
         return False
     try:
@@ -166,23 +179,31 @@ def classify_warnings(timestamp: pd.Timestamp, req: PredictRequest, art: Dict[st
 
 @app.get('/', tags=['Info'], summary='Project information and API availability')
 def root():
-    return {'project': 'Smart Mobility Demand Forecasting and Capacity Allocation', 'description': 'Predicts hourly shared-bicycle demand and provides capacity recommendations using weather, time, and seasonal context.', 'api_version': '1.2.2', 'model_loaded': artifact is not None, 'mongodb_connected': _mongo_is_available(), 'endpoints': {'GET /': 'Project information (this response)', 'GET /health': 'API and model health check', 'GET /docs': 'Interactive API documentation (Swagger UI)', 'POST /predict': 'Bicycle demand prediction with capacity recommendation', 'GET /history': 'Paginated prediction history', 'GET /history/{record_id}': 'Retrieve a single prediction record'}}
+    return {'project': 'Smart Mobility Demand Forecasting and Capacity Allocation', 'description': 'Predicts hourly shared-bicycle demand and provides capacity recommendations using weather, time, and seasonal context.', 'api_version': '1.2.2', 'model_loaded': artifact is not None, 'mongodb_enabled': is_mongodb_enabled(), 'mongodb_connected': _mongo_is_available(), 'endpoints': {'GET /': 'Project information (this response)', 'GET /health': 'API and model health check', 'GET /docs': 'Interactive API documentation (Swagger UI)', 'POST /predict': 'Bicycle demand prediction with capacity recommendation', 'GET /history': 'Paginated prediction history (requires MongoDB)', 'GET /history/{record_id}': 'Retrieve a single prediction record (requires MongoDB)'}}
 
 @app.get('/health', tags=['Info'], summary='API health check including model and MongoDB status')
 def health():
     model_ok = artifact is not None
+    mongo_enabled = is_mongodb_enabled()
     mongo_ok = _mongo_is_available()
-    overall_healthy = model_ok and mongo_ok
-    response: Dict[str, Any] = {'status': 'healthy' if overall_healthy else 'degraded', 'model_loaded': model_ok, 'mongodb': {'connected': mongo_ok, 'database': MONGODB_DATABASE, 'collection': MONGODB_COLLECTION}}
+    overall_healthy = model_ok and (mongo_ok if mongo_enabled else True)
+    mongodb_info: Dict[str, Any] = {'enabled': mongo_enabled, 'connected': mongo_ok}
+    if mongo_enabled:
+        mongodb_info['database'] = MONGODB_DATABASE
+        mongodb_info['collection'] = MONGODB_COLLECTION
+    response: Dict[str, Any] = {'status': 'healthy' if overall_healthy else 'degraded', 'model_loaded': model_ok, 'mongodb': mongodb_info}
     if not model_ok:
         response['model_message'] = 'Model artifact not loaded. Run `python train_model.py` first.'
-    if not mongo_ok:
-        response['mongodb_message'] = 'MongoDB is not reachable. Predictions will not be persisted.'
+    if mongo_enabled:
+        if not mongo_ok:
+            response['mongodb_message'] = 'MongoDB is enabled but unreachable. Predictions will not be persisted.'
+    else:
+        response['mongodb_message'] = 'MongoDB persistence is disabled (MONGODB_ENABLED=false). Predictions are not persisted.'
     if model_ok:
         response.update({'artifact_version': artifact.get('artifact_version'), 'training_data_range': {'start': artifact.get('training_start'), 'end': artifact.get('training_end')}, 'dataset_range': {'start': artifact.get('dataset_start'), 'end': artifact.get('dataset_end')}, 'test_period': {'start': artifact.get('test_start'), 'end': artifact.get('test_end')}, 'target': artifact.get('target_name'), 'bike_vehicle_types': artifact.get('bike_vehicle_types'), 'stations_in_training': artifact.get('station_count')})
     return response
 
-@app.post('/predict', tags=['Prediction'], summary='Predict hourly bicycle demand and capacity recommendations', description='Accepts 12 input fields, derives cyclic features, assigns contextual profile, predicts demand, and stores history in MongoDB.')
+@app.post('/predict', tags=['Prediction'], summary='Predict hourly bicycle demand and capacity recommendations', description='Accepts 12 input fields, derives cyclic features, assigns contextual profile, predicts demand, and optionally stores history in MongoDB.')
 def predict(req: PredictRequest):
     if artifact is None:
         raise HTTPException(status_code=503, detail='Model not loaded. Run `python train_model.py` and restart the server.')
@@ -236,21 +257,26 @@ def predict(req: PredictRequest):
     now = datetime.now(timezone.utc)
     created_at = now.replace(microsecond=now.microsecond // 1000 * 1000)
     created_at_iso = format_utc_timestamp(created_at)
-    record_oid = ObjectId()
-    record_id = str(record_oid)
-    prediction_response['prediction_record_id'] = record_id
     prediction_response['created_at'] = created_at_iso
-    document = {'_id': record_oid, 'request_input': req.model_dump(), 'response': prediction_response, 'created_at': created_at}
-    if mongo_collection is None or not _mongo_is_available():
-        raise HTTPException(status_code=503, detail='MongoDB is unavailable. The prediction was computed but could not be saved. Please ensure MongoDB is running and restart the server.')
-    try:
-        mongo_collection.insert_one(document)
-    except PyMongoError as exc:
-        raise HTTPException(status_code=503, detail=f'Failed to save prediction to MongoDB: {exc}')
+    if is_mongodb_enabled():
+        if mongo_collection is None or not _mongo_is_available():
+            raise HTTPException(status_code=503, detail='MongoDB is unavailable. The prediction was computed but could not be saved. Please ensure MongoDB is running and restart the server.')
+        record_oid = ObjectId()
+        record_id = str(record_oid)
+        prediction_response['prediction_record_id'] = record_id
+        document = {'_id': record_oid, 'request_input': req.model_dump(), 'response': prediction_response, 'created_at': created_at}
+        try:
+            mongo_collection.insert_one(document)
+        except PyMongoError as exc:
+            raise HTTPException(status_code=503, detail=f'Failed to save prediction to MongoDB: {exc}')
+    else:
+        prediction_response['prediction_record_id'] = None
     return prediction_response
 
 @app.get('/history', tags=['History'], summary='Retrieve paginated prediction history (latest first)')
 def get_history(limit: int=Query(default=20, ge=1, le=100, description='Records per page'), offset: int=Query(default=0, ge=0, description='Number of records to skip')):
+    if not is_mongodb_enabled():
+        raise HTTPException(status_code=503, detail='Prediction history is disabled (MONGODB_ENABLED=false).')
     if mongo_collection is None or not _mongo_is_available():
         raise HTTPException(status_code=503, detail='MongoDB is unavailable. Cannot retrieve prediction history.')
     try:
@@ -276,6 +302,8 @@ def get_history(limit: int=Query(default=20, ge=1, le=100, description='Records 
 
 @app.get('/history/{record_id}', tags=['History'], summary='Retrieve a single prediction record by MongoDB ObjectId')
 def get_history_record(record_id: str):
+    if not is_mongodb_enabled():
+        raise HTTPException(status_code=503, detail='Prediction history is disabled (MONGODB_ENABLED=false).')
     if mongo_collection is None or not _mongo_is_available():
         raise HTTPException(status_code=503, detail='MongoDB is unavailable. Cannot retrieve prediction record.')
     try:
@@ -300,3 +328,8 @@ def get_history_record(record_id: str):
         if not resp.get('prediction_record_id'):
             resp['prediction_record_id'] = str(doc['_id'])
     return {'record_id': str(doc['_id']), 'created_at': created_iso, 'input': doc.get('request_input'), 'prediction_response': resp}
+
+if __name__ == '__main__':
+    import uvicorn
+    port = int(os.environ.get('PORT', 8000))
+    uvicorn.run('main:app', host='0.0.0.0', port=port, reload=False)
